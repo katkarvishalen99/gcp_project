@@ -118,6 +118,11 @@ resource "google_project_iam_binding" "os_login" {
   role    = "roles/compute.osLogin"
   members = ["user:katkarvishalen99@gmail.com"]
 }
+resource "google_project_iam_binding" "role_monitoring_binding" {
+  project = var.project
+  role    = "roles/monitoring.metricWriter"
+  members = ["serviceAccount:$(google_service_account.vm-sa.email"]
+}
 
 #=========================IAP user===================================
 resource "google_iap_tunnel_instance_iam_binding" "iap_tunnel_user" {
