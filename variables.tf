@@ -25,3 +25,9 @@ variable "subnet_name" {
 variable "subnet-cidr" {
   type = string
 }
+variable "oauth2_client_id" {
+  type = string
+}
+variable "oauth2_client_secret" {
+  type = string
+}
