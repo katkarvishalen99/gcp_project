@@ -121,7 +121,7 @@ resource "google_project_iam_binding" "os_login" {
 resource "google_project_iam_binding" "role_monitoring_binding" {
   project = var.project
   role    = "roles/monitoring.metricWriter"
-  members = ["serviceAccount:$(google_service_account.vm-sa.email"]
+  members = ["serviceAccount:${google_service_account.vm-sa.email}"]
 }
 
 #=========================IAP user===================================
@@ -184,13 +184,13 @@ resource "google_compute_security_policy" "vpn_allow_policy" {
     match {
       versioned_expr = "SRC_IPS_V1"
       config {
-        src_ip_ranges = ["185.4.97.2"]
+        src_ip_ranges = ["185.4.97.2/32"]
       }
     }
     action = "allow"
   }
   rule {
-    priority    = 2000
+    priority    = 2147483647
     match {
       versioned_expr = "SRC_IPS_V1"
       config {
