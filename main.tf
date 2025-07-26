@@ -173,6 +173,49 @@ resource "google_compute_forwarding_rule" "forwarding_rule" {
   load_balancing_scheme = "EXTERNAL"
 }
 
+#==================Cloud Armor policy==========================
+
+resource "google_compute_security_policy" "vpn_allow_policy" {
+  name        = "vpn-allow-policy"
+  description = "Allow traffic only from specific VPN IP"
+
+  rule {
+    priority    = 1000
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["185.4.97.2"]
+      }
+    }
+    action = "allow"
+  }
+  rule {
+    priority    = 2000
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    action = "deny(403)"
+    description = "Deny all other traffic"
+  }
+}
+
+
+resource "google_compute_backend_service" "default" {
+  name                  = "my-backend-service"
+  protocol              = "HTTP"
+  port_name             = "http"
+  timeout_sec           = 10
+  load_balancing_scheme = "EXTERNAL"
+
+  backend {
+    group = google_compute_instance_group.u_instance_group.self_link
+  }
+  security_policy = google_compute_security_policy.vpn_allow_policy.id
+}
+
 
 
 
