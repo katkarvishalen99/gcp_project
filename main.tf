@@ -10,7 +10,7 @@ resource "google_compute_subnetwork" "subnet" {
   name                     = var.subnet_name
   ip_cidr_range            = var.subnet-cidr
   region                   = var.region
-  network                  = var.vpc_name
+  network                  = google_compute_network.vpc.id
   private_ip_google_access = true
   depends_on               = ["google_compute_network.vpc"]
 }
@@ -92,16 +92,102 @@ resource "google_compute_instance" "vm1-private" {
 
 #======================== unmanged instance group ===================
 resource "google_compute_instance_group" "u_instance_group" {
-  name              = var.instance_name
-  instances = [google_compute_instance.vm1-private.self_link]
-  zone              = var.zone
+  name       = var.instance_name
+  zone       = var.zone
+  instances  = [google_compute_instance.vm1-private.self_link]
 
   named_port {
     name = "http"
-    port = 90
+    port = 80
   }
 
 }
+
+#==================Cloud Armor security policy==========================
+
+resource "google_compute_security_policy" "vpn_allow_policy" {
+  name        = "vpn-allow-policy"
+  description = "Allow traffic only from specific VPN IP"
+
+  rule {
+    priority    = 1000
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["185.4.97.2/32"]
+      }
+    }
+    action = "allow"
+  }
+  rule {
+    priority    = 2147483647
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    action = "deny(403)"
+    description = "Deny all other traffic"
+  }
+}
+#========================Health Check===================================================
+
+resource "google_compute_http_health_check" "health_check" {
+  name               = "health-check"
+  request_path       = "/"
+  port               = 80
+  check_interval_sec = 5
+  timeout_sec        = 5
+  healthy_threshold  = 2
+  unhealthy_threshold = 2
+}
+
+#========================Backend service with Cloud Armor==============================
+
+resource "google_compute_backend_service" "backend" {
+  name                  = "http-backend"
+  protocol              = "HTTP"
+  port_name             = "http"
+  timeout_sec           = 10
+  load_balancing_scheme = "EXTERNAL"
+
+  backend {
+    group = google_compute_instance_group.u_instance_group.self_link
+  }
+  
+  iap {
+  oauth2_client_id     = var.oauth2_client_id
+  oauth2_client_secret = var.oauth2_client_secret
+  }
+
+  health_checks   = google_compute_http_health_check.health_check.self_link
+  security_policy = google_compute_security_policy.vpn_allow_policy.id
+}
+
+#========================URL map==============================
+resource "google_compute_url_map" "url_map" {
+  name            = "http-url-map"
+  default_service = google_compute_backend_service.backend.self_link
+}
+
+#========================Target http proxy==============================
+resource "google_compute_target_http_proxy" "http_proxy" {
+  name    = "http-proxy"
+  url_map = google_compute_url_map.url_map.self_link
+}
+
+#=================Forwarding rule==============================
+
+resource "google_compute_forwarding_rule" "forwarding_rule" {
+  name        = "forwarding-rule"
+  region      = var.region
+  target      = google_compute_target_http_proxy.http_proxy.self_link
+  port_range  = "80"
+  ip_protocol = "TCP"
+  load_balancing_scheme = "EXTERNAL"
+}
+
 #========================IAM role and permission=====================
 resource "google_project_iam_binding" "role_viewer_binding" {
   project = var.project
@@ -135,87 +221,10 @@ resource "google_iap_tunnel_instance_iam_binding" "iap_tunnel_user" {
   depends_on = [google_compute_instance_group.u_instance_group]
 }
 
-#====================== Health check================================
-
-resource "google_compute_http_health_check" "health_check" {
-  name               = "health-check"
-  request_path       = "/"
-  port               = 80
-  check_interval_sec = 5
-  timeout_sec        = 5
-  healthy_threshold  = 2
-  unhealthy_threshold = 2
+#========================Appache app user authentication==============
+resource "google_iap_web_backend_service_iam_member" "iap_web_user" {
+  project             = var.project
+  web_backend_service = google_compute_backend_service.backend.name
+  role                = "roles/iap.httpsResourceAccessor"
+  member              = "user:katkarvishalen99@gmail.com"
 }
-
-#=====================Backend Pool================================
-
-resource "google_compute_target_pool" "backend_pool" {
-  name   = "backend-target-pool"
-  region = var.region
-
-  instances = [
-    google_compute_instance.vm1-private.self_link
-  ]
-
-  health_checks = [
-    google_compute_http_health_check.health_check.self_link
-  ]
-}
-
-#=================Forwarding rule==============================
-
-resource "google_compute_forwarding_rule" "forwarding_rule" {
-  name        = "forwarding-rule"
-  region      = var.region
-  target      = google_compute_target_pool.backend_pool.self_link
-  port_range  = "80"
-  ip_protocol = "TCP"
-  load_balancing_scheme = "EXTERNAL"
-}
-
-#==================Cloud Armor policy==========================
-
-resource "google_compute_security_policy" "vpn_allow_policy" {
-  name        = "vpn-allow-policy"
-  description = "Allow traffic only from specific VPN IP"
-
-  rule {
-    priority    = 1000
-    match {
-      versioned_expr = "SRC_IPS_V1"
-      config {
-        src_ip_ranges = ["185.4.97.2/32"]
-      }
-    }
-    action = "allow"
-  }
-  rule {
-    priority    = 2147483647
-    match {
-      versioned_expr = "SRC_IPS_V1"
-      config {
-        src_ip_ranges = ["*"]
-      }
-    }
-    action = "deny(403)"
-    description = "Deny all other traffic"
-  }
-}
-
-
-resource "google_compute_backend_service" "default" {
-  name                  = "my-backend-service"
-  protocol              = "HTTP"
-  port_name             = "http"
-  timeout_sec           = 10
-  load_balancing_scheme = "EXTERNAL"
-
-  backend {
-    group = google_compute_instance_group.u_instance_group.self_link
-  }
-  security_policy = google_compute_security_policy.vpn_allow_policy.id
-}
-
-
-
-
