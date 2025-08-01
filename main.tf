@@ -12,7 +12,7 @@ resource "google_compute_subnetwork" "subnet" {
   region                   = var.region
   network                  = google_compute_network.vpc.id
   private_ip_google_access = true
-  depends_on               = ["google_compute_network.vpc"]
+  depends_on               = [google_compute_network.vpc]
 }
 
 resource "google_compute_router" "nat-router" {
@@ -33,7 +33,7 @@ resource "google_compute_router_nat" "nat" {
 resource "google_compute_firewall" "fw-rule1" {
   name       = "fw-rule1"
   network    = var.vpc_name
-  depends_on = ["google_compute_network.vpc"]
+  depends_on = [google_compute_network.vpc]
   allow {
     protocol = "icmp"
   }
@@ -47,13 +47,30 @@ resource "google_compute_firewall" "fw-rule1" {
 resource "google_compute_firewall" "fw-iap" {
   name       = "fw-iap"
   network    = var.vpc_name
-  depends_on = ["google_compute_network.vpc"]
+  depends_on = [google_compute_network.vpc]
   allow {
     protocol = "tcp"
-    ports    = ["22"]
+    ports    = ["22","80","443"]
   }
   source_ranges = ["35.235.240.0/20"]
 }
+
+resource "google_compute_firewall" "allow-vpn-to-backend" {
+  name       = "allow-vpn-to-backend"
+  network    = var.vpc_name
+  depends_on = [google_compute_network.vpc]
+  direction = "INGRESS"
+  priority = "1000"
+  
+  allow {
+    protocol = "tcp"
+    ports    = ["80","443"]
+  }
+  source_ranges = ["10.38.216.171/32"]
+  target_tags = ["backend-instance"]
+}
+
+
 #================================service account=======================
 resource "google_service_account" "vm-sa" {
   account_id   = "vm-sa-id"
@@ -65,8 +82,7 @@ resource "google_compute_instance" "vm1-private" {
   name         = var.instance_name
   machine_type = var.machine_type
   zone         = var.zone
-  depends_on   = ["google_compute_subnetwork.subnet"]
-  tags         = ["test"]
+  depends_on   = [google_compute_subnetwork.subnet]
   service_account {
     email  = google_service_account.vm-sa.email
     scopes = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -88,6 +104,7 @@ resource "google_compute_instance" "vm1-private" {
   metadata = {
     enable-oslogin = "TRUE"
   }
+  tags = ["backend-instance"]
 }
 
 #======================== unmanged instance group ===================
@@ -105,7 +122,7 @@ resource "google_compute_instance_group" "u_instance_group" {
 
 #==================Cloud Armor security policy==========================
 
-resource "google_compute_security_policy" "vpn_allow_policy" {
+/*resource "google_compute_security_policy" "vpn_allow_policy" {
   name        = "vpn-allow-policy"
   description = "Allow traffic only from specific VPN IP"
 
@@ -130,17 +147,16 @@ resource "google_compute_security_policy" "vpn_allow_policy" {
     action = "deny(403)"
     description = "Deny all other traffic"
   }
-}
+}*/
 #========================Health Check===================================================
 
-resource "google_compute_http_health_check" "health_check" {
+resource "google_compute_health_check" "health_check" {
   name               = "health-check"
-  request_path       = "/"
-  port               = 80
-  check_interval_sec = 5
-  timeout_sec        = 5
-  healthy_threshold  = 2
-  unhealthy_threshold = 2
+ 
+  http_health_check {
+       port = 80
+       request_path = "/"
+     }
 }
 
 #========================Backend service with Cloud Armor==============================
@@ -156,13 +172,14 @@ resource "google_compute_backend_service" "backend" {
     group = google_compute_instance_group.u_instance_group.self_link
   }
   
-  iap {
-  oauth2_client_id     = var.oauth2_client_id
-  oauth2_client_secret = var.oauth2_client_secret
-  }
+  /*iap {
+    enabled = true
+    oauth2_client_id     = var.oauth2_client_id
+    oauth2_client_secret = var.oauth2_client_secret
+  }*/
 
-  health_checks   = google_compute_http_health_check.health_check.self_link
-  security_policy = google_compute_security_policy.vpn_allow_policy.id
+  health_checks   = [google_compute_health_check.health_check.self_link]
+ # security_policy = google_compute_security_policy.vpn_allow_policy.id
 }
 
 #========================URL map==============================
@@ -179,9 +196,8 @@ resource "google_compute_target_http_proxy" "http_proxy" {
 
 #=================Forwarding rule==============================
 
-resource "google_compute_forwarding_rule" "forwarding_rule" {
+resource "google_compute_global_forwarding_rule" "forwarding_rule" {
   name        = "forwarding-rule"
-  region      = var.region
   target      = google_compute_target_http_proxy.http_proxy.self_link
   port_range  = "80"
   ip_protocol = "TCP"
